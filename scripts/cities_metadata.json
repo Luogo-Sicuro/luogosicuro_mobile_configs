@@ -1,0 +1,56 @@
+[
+  {
+    "id": "contrada",
+    "name": "Contrada",
+    "province": "AV",
+    "latitude": 40.867808,
+    "longitude": 14.775157,
+    "geofenceRadius": 5000,
+    "pdfFileName": "Contrada"
+  },
+  {
+    "id": "vallesaccarda",
+    "name": "Vallesaccarda",
+    "province": "AV",
+    "latitude": 41.062725,
+    "longitude": 15.251631,
+    "geofenceRadius": 5000,
+    "pdfFileName": "Vallesaccarda"
+  },
+  {
+    "id": "novi_velia",
+    "name": "Novi Velia",
+    "province": "SA",
+    "latitude": 40.222754,
+    "longitude": 15.286032,
+    "geofenceRadius": 5000,
+    "pdfFileName": "Novi Velia"
+  },
+  {
+    "id": "perito",
+    "name": "Perito",
+    "province": "SA",
+    "latitude": 40.298187,
+    "longitude": 15.147616,
+    "geofenceRadius": 5000,
+    "pdfFileName": "Perito"
+  },
+  {
+    "id": "san_nicola_baronia",
+    "name": "San Nicola Baronia",
+    "province": "AV",
+    "latitude": 41.058783,
+    "longitude": 15.199342,
+    "geofenceRadius": 5000,
+    "pdfFileName": "San Nicola Baronia"
+  },
+  {
+    "id": "lacco_ameno",
+    "name": "Lacco Ameno",
+    "province": "NA",
+    "latitude": 40.750293,
+    "longitude": 13.890337,
+    "geofenceRadius": 5000,
+    "pdfFileName": "Lacco Ameno"
+  }
+]

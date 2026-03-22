@@ -1,59 +1,60 @@
 #!/usr/bin/env bash
 # add_city.sh — Aggiunge una nuova citta al sistema di risorse remote
 #
-# Automatizza: packaging, upload risorse cifrate, aggiornamento cities.json
-# NON automatizza: copia file nel bundle, aggiornamento codice (fallback list, alias)
+# Automatizza: aggiornamento metadata, packaging, upload risorse cifrate, aggiornamento cities.json v2
+# NON automatizza: copia file nel bundle, aggiornamento codice (alias layer)
 #
 # Uso:
-#   ./scripts/add_city.sh <city_id> <city_name> [opzioni]
+#   ./scripts/add_city.sh <city_id> <city_name> --province XX --lat N --lon N [opzioni]
+#   ./scripts/add_city.sh --all   # Rigenera e carica TUTTE le citta
 #
 # Esempi:
-#   ./scripts/add_city.sh fisciano "Fisciano"
-#   ./scripts/add_city.sh monte_san_giacomo "Monte San Giacomo" --province SA --lat 40.337 --lon 15.328
-#   ./scripts/add_city.sh fisciano "Fisciano" --skip-cities-json
-#   ./scripts/add_city.sh --all   # Rigenera e carica TUTTE le citta
+#   ./scripts/add_city.sh fisciano "Fisciano" --province SA --lat 40.770 --lon 14.793
+#   ./scripts/add_city.sh --all
 #
 # Prerequisiti:
 #   - gh (GitHub CLI) installato e autenticato
 #   - python3 con pacchetto 'cryptography'
 #   - File GeoJSON in mobile_ios/Projects/App/Resources/GeoJSON/{city_id}/
 #   - File PDF in mobile_ios/Projects/App/Resources/PDF/{city_name}.pdf
-#   - Mapping PDF aggiunto in package_resources.py (CITY_PDF_MAP)
 
 set -euo pipefail
 
 REPO="LuogoSicuro/luogosicuro_mobile_configs"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-WORKSPACE_ROOT="$(dirname "$SCRIPT_DIR")"
+WORKSPACE_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
 IOS_GEOJSON_DIR="${WORKSPACE_ROOT}/mobile_ios/Projects/App/Resources/GeoJSON"
 IOS_PDF_DIR="${WORKSPACE_ROOT}/mobile_ios/Projects/App/Resources/PDF"
+METADATA_FILE="${SCRIPT_DIR}/cities_metadata.json"
 
 GEOJSON_TAG="geojson-v1"
 PDF_TAG="pdf-v1"
+BOUNDARY_TAG="boundaries-v1"
 MANIFEST_TAG="v1.0"
 
 # Opzioni
-SKIP_CITIES_JSON=false
 ALL_MODE=false
 PROVINCE=""
 LAT=""
 LON=""
 GEOFENCE_RADIUS="5000"
+PDF_FILENAME=""
 
 print_usage() {
   cat <<EOF
-Uso: $(basename "$0") <city_id> <city_name> [opzioni]
+Uso: $(basename "$0") <city_id> <city_name> --province XX --lat N --lon N [opzioni]
      $(basename "$0") --all [opzioni]
 
 Opzioni:
-  --province XX         Sigla provincia (per cities.json)
-  --lat N               Latitudine centro citta
-  --lon N               Longitudine centro citta
+  --province XX         Sigla provincia (obbligatorio per nuova citta)
+  --lat N               Latitudine centro citta (obbligatorio per nuova citta)
+  --lon N               Longitudine centro citta (obbligatorio per nuova citta)
   --radius N            Raggio geofencing in metri (default: 5000)
-  --skip-cities-json    Non aggiornare cities.json (utile se gia aggiornato)
+  --pdf-filename NAME   Nome file PDF senza estensione (default: city_name)
   --geojson-tag TAG     Tag release GeoJSON (default: geojson-v1)
   --pdf-tag TAG         Tag release PDF (default: pdf-v1)
+  --boundary-tag TAG    Tag release boundary (default: boundaries-v1)
   --all                 Rigenera e carica TUTTE le citta
 
 Esempio:
@@ -73,9 +74,10 @@ while [[ $# -gt 0 ]]; do
     --lat) LAT="$2"; shift 2 ;;
     --lon) LON="$2"; shift 2 ;;
     --radius) GEOFENCE_RADIUS="$2"; shift 2 ;;
-    --skip-cities-json) SKIP_CITIES_JSON=true; shift ;;
+    --pdf-filename) PDF_FILENAME="$2"; shift 2 ;;
     --geojson-tag) GEOJSON_TAG="$2"; shift 2 ;;
     --pdf-tag) PDF_TAG="$2"; shift 2 ;;
+    --boundary-tag) BOUNDARY_TAG="$2"; shift 2 ;;
     -h|--help) print_usage; exit 0 ;;
     -*) echo "Opzione sconosciuta: $1"; print_usage; exit 1 ;;
     *) POSITIONAL+=("$1"); shift ;;
@@ -90,6 +92,7 @@ if [[ "$ALL_MODE" == false ]]; then
   fi
   CITY_ID="${POSITIONAL[0]}"
   CITY_NAME="${POSITIONAL[1]}"
+  [[ -z "$PDF_FILENAME" ]] && PDF_FILENAME="$CITY_NAME"
 fi
 
 # --- Verifica prerequisiti ---
@@ -119,7 +122,8 @@ if [[ "$ALL_MODE" == true ]]; then
 
   echo "2/3 Upload su GitHub Releases..."
   bash "${SCRIPT_DIR}/upload_resources.sh" \
-    --geojson-tag "$GEOJSON_TAG" --pdf-tag "$PDF_TAG" --manifest-tag "$MANIFEST_TAG"
+    --geojson-tag "$GEOJSON_TAG" --pdf-tag "$PDF_TAG" \
+    --boundary-tag "$BOUNDARY_TAG" --manifest-tag "$MANIFEST_TAG"
   echo ""
 
   echo "3/3 Completato."
@@ -129,6 +133,13 @@ fi
 # --- Modalita singola citta ---
 echo "=== Aggiunta citta: ${CITY_NAME} (${CITY_ID}) ==="
 echo ""
+
+# Verifica parametri obbligatori
+if [[ -z "$PROVINCE" || -z "$LAT" || -z "$LON" ]]; then
+  echo "ERRORE: --province, --lat e --lon sono obbligatori per una nuova citta"
+  print_usage
+  exit 1
+fi
 
 # Verifica file sorgente
 CITY_GEOJSON_DIR="${IOS_GEOJSON_DIR}/${CITY_ID}"
@@ -145,36 +156,49 @@ if [[ "$GEOJSON_COUNT" -eq 0 ]]; then
 fi
 echo "  GeoJSON: ${GEOJSON_COUNT} file trovati"
 
-# Verifica PDF mapping in package_resources.py
-if ! grep -q "\"${CITY_ID}\"" "${SCRIPT_DIR}/package_resources.py"; then
-  echo ""
-  echo "ERRORE: city_id '${CITY_ID}' non trovato in CITY_PDF_MAP di package_resources.py"
-  echo "Aggiungi il mapping prima di procedere:"
-  echo "  \"${CITY_ID}\": \"${CITY_NAME}.pdf\","
-  exit 1
-fi
-
 # Verifica PDF esiste
-PDF_FILE=$(python3 -c "
-import sys; sys.path.insert(0, '${SCRIPT_DIR}')
-from package_resources import CITY_PDF_MAP
-print(CITY_PDF_MAP.get('${CITY_ID}', ''))
-" 2>/dev/null || echo "")
-
-if [[ -z "$PDF_FILE" ]]; then
-  echo "ATTENZIONE: impossibile leggere il mapping PDF. Verifico manualmente..."
-  PDF_FILE="${CITY_NAME}.pdf"
-fi
-
-if [[ ! -f "${IOS_PDF_DIR}/${PDF_FILE}" ]]; then
-  echo "ERRORE: PDF non trovato: ${IOS_PDF_DIR}/${PDF_FILE}"
+if [[ ! -f "${IOS_PDF_DIR}/${PDF_FILENAME}.pdf" ]]; then
+  echo "ERRORE: PDF non trovato: ${IOS_PDF_DIR}/${PDF_FILENAME}.pdf"
   exit 1
 fi
-echo "  PDF: ${PDF_FILE} trovato"
+echo "  PDF: ${PDF_FILENAME}.pdf trovato"
 
-# --- Step 1: Package ---
+# --- Step 1: Aggiorna cities_metadata.json ---
 echo ""
-echo "1/4 Packaging risorse cifrate..."
+echo "1/5 Aggiornamento cities_metadata.json..."
+
+if python3 -c "
+import json
+with open('${METADATA_FILE}') as f:
+    data = json.load(f)
+if any(c['id'] == '${CITY_ID}' for c in data):
+    exit(0)
+exit(1)
+" 2>/dev/null; then
+  echo "  '${CITY_ID}' gia presente in cities_metadata.json"
+else
+  python3 -c "
+import json
+with open('${METADATA_FILE}') as f:
+    data = json.load(f)
+data.append({
+    'id': '${CITY_ID}',
+    'name': '${CITY_NAME}',
+    'province': '${PROVINCE}',
+    'latitude': ${LAT},
+    'longitude': ${LON},
+    'geofenceRadius': ${GEOFENCE_RADIUS},
+    'pdfFileName': '${PDF_FILENAME}'
+})
+with open('${METADATA_FILE}', 'w') as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+print('  Aggiunto a cities_metadata.json')
+"
+fi
+
+# --- Step 2: Package ---
+echo ""
+echo "2/5 Packaging risorse cifrate..."
 python3 "${SCRIPT_DIR}/package_resources.py" --output-dir "$OUTPUT_DIR"
 
 # Verifica output
@@ -182,150 +206,32 @@ if [[ ! -f "${OUTPUT_DIR}/${CITY_ID}.geojson.deflate.enc" ]]; then
   echo "ERRORE: file GeoJSON cifrato non generato"
   exit 1
 fi
-if [[ ! -f "${OUTPUT_DIR}/${CITY_ID}.pdf.enc" ]]; then
-  echo "ERRORE: file PDF cifrato non generato"
-  exit 1
-fi
 
-# --- Step 2: Upload GeoJSON ---
+# --- Step 3: Upload ---
 echo ""
-echo "2/4 Upload GeoJSON cifrato..."
+echo "3/5 Upload su GitHub Releases..."
+bash "${SCRIPT_DIR}/upload_resources.sh" \
+  --geojson-tag "$GEOJSON_TAG" --pdf-tag "$PDF_TAG" \
+  --boundary-tag "$BOUNDARY_TAG" --manifest-tag "$MANIFEST_TAG"
 
-if ! gh release view "$GEOJSON_TAG" --repo "$REPO" &>/dev/null; then
-  gh release create "$GEOJSON_TAG" --repo "$REPO" \
-    --title "GeoJSON ${GEOJSON_TAG#geojson-}" \
-    --notes "Encrypted GeoJSON bundles"
-fi
-
-gh release upload "$GEOJSON_TAG" \
-  "${OUTPUT_DIR}/${CITY_ID}.geojson.deflate.enc" \
-  --repo "$REPO" --clobber
-
-# --- Step 3: Upload PDF ---
-echo ""
-echo "3/4 Upload PDF cifrato..."
-
-if ! gh release view "$PDF_TAG" --repo "$REPO" &>/dev/null; then
-  gh release create "$PDF_TAG" --repo "$REPO" \
-    --title "PDF ${PDF_TAG#pdf-}" \
-    --notes "Encrypted PDF plans"
-fi
-
-gh release upload "$PDF_TAG" \
-  "${OUTPUT_DIR}/${CITY_ID}.pdf.enc" \
-  --repo "$REPO" --clobber
-
-# --- Step 4: Upload manifest + cities.json ---
-echo ""
-echo "4/4 Aggiornamento manifest e cities.json..."
-
-if ! gh release view "$MANIFEST_TAG" --repo "$REPO" &>/dev/null; then
-  gh release create "$MANIFEST_TAG" --repo "$REPO" \
-    --title "Config ${MANIFEST_TAG}" \
-    --notes "Configuration files"
-fi
-
-gh release upload "$MANIFEST_TAG" \
-  "${OUTPUT_DIR}/manifest.json" \
-  --repo "$REPO" --clobber
-
-# Aggiornamento cities.json
-if [[ "$SKIP_CITIES_JSON" == false ]]; then
-  echo ""
-  echo "  Aggiornamento cities.json..."
-
-  TMPDIR_WORK=$(mktemp -d)
-  trap "rm -rf '$TMPDIR_WORK'" EXIT
-
-  # Scarica cities.json corrente
-  CITIES_FILE="${TMPDIR_WORK}/cities.json"
-  if gh release download "$MANIFEST_TAG" --pattern "cities.json" --repo "$REPO" --dir "$TMPDIR_WORK" 2>/dev/null; then
-    echo "  cities.json scaricato"
-  else
-    echo "  cities.json non trovato, creo nuovo file"
-    echo '{"cities":[]}' > "$CITIES_FILE"
-  fi
-
-  # Verifica se la citta esiste gia
-  if python3 -c "
-import json, sys
-with open('${CITIES_FILE}') as f:
-    data = json.load(f)
-cities = data if isinstance(data, list) else data.get('cities', [])
-# Cerca per nome (puo essere stringa o oggetto)
-for c in cities:
-    name = c if isinstance(c, str) else c.get('name', '')
-    if name == '${CITY_NAME}':
-        sys.exit(0)
-sys.exit(1)
-" 2>/dev/null; then
-    echo "  '${CITY_NAME}' gia presente in cities.json, skip"
-  else
-    # Aggiungi la nuova citta
-    if [[ -n "$LAT" && -n "$LON" && -n "$PROVINCE" ]]; then
-      # Formato completo con metadati
-      python3 -c "
-import json
-with open('${CITIES_FILE}') as f:
-    data = json.load(f)
-cities = data if isinstance(data, list) else data.get('cities', [])
-# Se e' un array di stringhe, aggiungi come stringa
-if cities and isinstance(cities[0], str):
-    cities.append('${CITY_NAME}')
-else:
-    cities.append({
-        'id': '${CITY_ID}',
-        'name': '${CITY_NAME}',
-        'province': '${PROVINCE}',
-        'latitude': ${LAT},
-        'longitude': ${LON},
-        'geofenceRadius': ${GEOFENCE_RADIUS},
-        'hasPlan': True
-    })
-if isinstance(data, list):
-    data = cities
-else:
-    data['cities'] = cities
-with open('${CITIES_FILE}', 'w') as f:
-    json.dump(data, f, indent=2, ensure_ascii=False)
-"
-    else
-      # Formato semplice (solo nome)
-      python3 -c "
-import json
-with open('${CITIES_FILE}') as f:
-    data = json.load(f)
-cities = data if isinstance(data, list) else data.get('cities', [])
-if isinstance(cities[0], str) if cities else True:
-    cities.append('${CITY_NAME}')
-if isinstance(data, list):
-    data = cities
-else:
-    data['cities'] = cities
-with open('${CITIES_FILE}', 'w') as f:
-    json.dump(data, f, indent=2, ensure_ascii=False)
-"
-    fi
-
-    gh release upload "$MANIFEST_TAG" "$CITIES_FILE" --repo "$REPO" --clobber
-    echo "  cities.json aggiornato con '${CITY_NAME}'"
-  fi
-fi
-
-# --- Riepilogo ---
+# --- Step 4: Riepilogo ---
 echo ""
 echo "=== Completato ==="
 echo ""
 echo "Risorse remote caricate per: ${CITY_NAME} (${CITY_ID})"
 echo ""
 echo "Prossimi step manuali (se non ancora fatti):"
-echo "  1. Aggiorna fallback list iOS (CityModels.swift → mockCities)"
-echo "  2. Aggiorna fallback list Android (cities_manifest.json in assets)"
-echo "  3. Copia GeoJSON nel bundle Android (app/src/main/assets/geojson/${CITY_ID}/)"
-echo "  4. Verifica alias layer (LayerRepository.swift + CityRepository.kt)"
-echo "  5. Build e test su entrambe le piattaforme"
+echo "  1. Copia GeoJSON nel bundle iOS (gia fatto se hai preparato i file)"
+echo "  2. Copia GeoJSON nel bundle Android (app/src/main/assets/geojson/${CITY_ID}/)"
+echo "  3. Verifica alias layer (LayerRepository.swift + CityRepository.kt)"
+echo "  4. Build e test su entrambe le piattaforme"
+echo ""
+echo "NOTA: Non serve aggiornare fallback list o layer allowlist!"
+echo "      L'app scarica automaticamente i metadati dal cities.json v2 remoto."
 echo ""
 echo "URL di verifica:"
-echo "  GeoJSON: https://github.com/${REPO}/releases/download/${GEOJSON_TAG}/${CITY_ID}.geojson.deflate.enc"
-echo "  PDF:     https://github.com/${REPO}/releases/download/${PDF_TAG}/${CITY_ID}.pdf.enc"
+echo "  GeoJSON:  https://github.com/${REPO}/releases/download/${GEOJSON_TAG}/${CITY_ID}.geojson.deflate.enc"
+echo "  PDF:      https://github.com/${REPO}/releases/download/${PDF_TAG}/${CITY_ID}.pdf.enc"
+echo "  Boundary: https://github.com/${REPO}/releases/download/${BOUNDARY_TAG}/${CITY_ID}.boundary.enc"
 echo "  Manifest: https://github.com/${REPO}/releases/download/${MANIFEST_TAG}/manifest.json"
+echo "  Cities:   https://github.com/${REPO}/releases/download/${MANIFEST_TAG}/cities.json"

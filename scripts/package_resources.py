@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """
-Package GeoJSON and PDF resources for luogoSICURO remote delivery.
+Package GeoJSON, PDF, and boundary resources for luogoSICURO remote delivery.
 
 For each city:
 - GeoJSON: bundles all .geojson files into a single JSON dict, raw-deflate compresses, encrypts with AES-256-GCM
 - PDF: encrypts the PDF file with AES-256-GCM
+- Boundary: encrypts confini_comunali.geojson with AES-256-GCM (no compression)
 
 Outputs:
 - {cityId}.geojson.deflate.enc  (encrypted deflate-compressed JSON bundle)
 - {cityId}.pdf.enc              (encrypted PDF)
+- {cityId}.boundary.enc         (encrypted boundary GeoJSON)
 - manifest.json                 (version manifest with SHA-256 hashes)
+- cities.json                   (v2 city catalog with full metadata)
 
 Usage:
     python3 package_resources.py [--output-dir ./output]
@@ -47,19 +50,11 @@ _KEY_PART2 = bytes([
 ENCRYPTION_KEY = bytes(a ^ b for a, b in zip(_KEY_PART1, _KEY_PART2))
 
 # --- Paths (relative to workspace root) ---
-WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT_DIR = Path(__file__).resolve().parent
+WORKSPACE_ROOT = SCRIPT_DIR.parent.parent
 IOS_GEOJSON_DIR = WORKSPACE_ROOT / "mobile_ios" / "Projects" / "App" / "Resources" / "GeoJSON"
 IOS_PDF_DIR = WORKSPACE_ROOT / "mobile_ios" / "Projects" / "App" / "Resources" / "PDF"
-
-# City ID → PDF filename mapping
-CITY_PDF_MAP = {
-    "contrada": "Contrada.pdf",
-    "vallesaccarda": "Vallesaccarda.pdf",
-    "novi_velia": "Novi Velia.pdf",
-    "perito": "Perito.pdf",
-    "san_nicola_baronia": "San Nicola Baronia.pdf",
-    "lacco_ameno": "Lacco Ameno.pdf",
-}
+CITIES_METADATA_FILE = SCRIPT_DIR / "cities_metadata.json"
 
 
 def encrypt_data(plaintext: bytes) -> bytes:
@@ -72,6 +67,15 @@ def encrypt_data(plaintext: bytes) -> bytes:
 
 def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def load_cities_metadata() -> list:
+    """Load city metadata from cities_metadata.json."""
+    if not CITIES_METADATA_FILE.exists():
+        print(f"WARNING: {CITIES_METADATA_FILE} not found, PDF mapping will be limited")
+        return []
+    with open(CITIES_METADATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def package_geojson(city_id: str, city_dir: Path, output_dir: Path) -> Optional[dict]:
@@ -93,7 +97,6 @@ def package_geojson(city_id: str, city_dir: Path, output_dir: Path) -> Optional[
             bundle[name] = json.load(fh)
 
     # Serialize → raw deflate compress → encrypt
-    # Using raw deflate (wbits=-15) for compatibility with Apple's Compression framework
     json_bytes = json.dumps(bundle, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     compressor = zlib.compressobj(9, zlib.DEFLATED, -15)
     compressed = compressor.compress(json_bytes) + compressor.flush()
@@ -113,14 +116,9 @@ def package_geojson(city_id: str, city_dir: Path, output_dir: Path) -> Optional[
     }
 
 
-def package_pdf(city_id: str, output_dir: Path) -> Optional[dict]:
+def package_pdf(city_id: str, pdf_filename: str, output_dir: Path) -> Optional[dict]:
     """Encrypt a city's PDF file."""
-    pdf_name = CITY_PDF_MAP.get(city_id)
-    if not pdf_name:
-        print(f"  WARNING: No PDF mapping for {city_id}")
-        return None
-
-    pdf_path = IOS_PDF_DIR / pdf_name
+    pdf_path = IOS_PDF_DIR / f"{pdf_filename}.pdf"
     if not pdf_path.exists():
         print(f"  WARNING: PDF not found: {pdf_path}")
         return None
@@ -140,9 +138,39 @@ def package_pdf(city_id: str, output_dir: Path) -> Optional[dict]:
     }
 
 
+def package_boundary(city_id: str, city_dir: Path, output_dir: Path) -> Optional[dict]:
+    """Encrypt the confini_comunali.geojson as a standalone boundary file (no compression)."""
+    # Try both naming conventions
+    boundary_file = None
+    for name in [f"{city_id}_confini_comunali.geojson", f"{city_id}_confine_comunale.geojson",
+                 "confini_comunali.geojson", "confine_comunale.geojson"]:
+        candidate = city_dir / name
+        if candidate.exists():
+            boundary_file = candidate
+            break
+
+    if boundary_file is None:
+        print(f"  WARNING: No boundary file found for {city_id}")
+        return None
+
+    plaintext = boundary_file.read_bytes()
+    encrypted = encrypt_data(plaintext)
+
+    out_path = output_dir / f"{city_id}.boundary.enc"
+    out_path.write_bytes(encrypted)
+
+    print(f"  Boundary: {len(plaintext) / 1024:.0f} KB raw → {len(encrypted) / 1024:.0f} KB encrypted")
+
+    return {
+        "version": 1,
+        "sha256": sha256_hex(encrypted),
+        "sizeBytes": len(encrypted),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Package luogoSICURO resources for remote delivery")
-    parser.add_argument("--output-dir", default=str(WORKSPACE_ROOT / "scripts" / "output"),
+    parser.add_argument("--output-dir", default=str(SCRIPT_DIR / "output"),
                         help="Output directory for encrypted files and manifest")
     args = parser.parse_args()
 
@@ -153,14 +181,15 @@ def main():
         print(f"ERROR: GeoJSON directory not found: {IOS_GEOJSON_DIR}")
         sys.exit(1)
 
+    # Load city metadata
+    cities_metadata = load_cities_metadata()
+    metadata_by_id = {m["id"]: m for m in cities_metadata}
+
     # Discover city directories
     city_dirs = sorted([d for d in IOS_GEOJSON_DIR.iterdir() if d.is_dir()])
     if not city_dirs:
         print(f"ERROR: No city directories found in {IOS_GEOJSON_DIR}")
         sys.exit(1)
-
-    # Fetch existing city names from the current cities.json if it exists
-    existing_cities = []
 
     manifest = {
         "version": 2,
@@ -169,11 +198,17 @@ def main():
         "pdf": {},
     }
 
+    # cities.json v2 entries
+    cities_v2_entries = []
+
     print(f"Packaging {len(city_dirs)} cities...\n")
 
     for city_dir in city_dirs:
         city_id = city_dir.name
         print(f"[{city_id}]")
+
+        meta = metadata_by_id.get(city_id, {})
+        pdf_filename = meta.get("pdfFileName", "")
 
         # GeoJSON
         geojson_entry = package_geojson(city_id, city_dir, output_dir)
@@ -181,29 +216,64 @@ def main():
             manifest["geojson"][city_id] = geojson_entry
 
         # PDF
-        pdf_entry = package_pdf(city_id, output_dir)
-        if pdf_entry:
-            manifest["pdf"][city_id] = pdf_entry
+        if pdf_filename:
+            pdf_entry = package_pdf(city_id, pdf_filename, output_dir)
+            if pdf_entry:
+                manifest["pdf"][city_id] = pdf_entry
+
+        # Boundary
+        boundary_info = package_boundary(city_id, city_dir, output_dir)
+
+        # Build v2 city entry
+        if meta:
+            city_entry = {
+                "id": city_id,
+                "name": meta["name"],
+                "province": meta["province"],
+                "latitude": meta["latitude"],
+                "longitude": meta["longitude"],
+                "geofenceRadius": meta.get("geofenceRadius", 5000),
+                "pdfFileName": meta.get("pdfFileName"),
+                "hasPlan": True,
+            }
+            if boundary_info:
+                city_entry["boundaryVersion"] = boundary_info["version"]
+                city_entry["boundarySha256"] = boundary_info["sha256"]
+                city_entry["boundarySizeBytes"] = boundary_info["sizeBytes"]
+            cities_v2_entries.append(city_entry)
 
         print()
 
-    # City names for backward compatibility
-    city_name_map = {v.replace(".pdf", ""): k for k, v in CITY_PDF_MAP.items()}
-    manifest["cities"] = [CITY_PDF_MAP[d.name].replace(".pdf", "") for d in city_dirs if d.name in CITY_PDF_MAP]
+    # City names for backward compatibility (v1 apps)
+    manifest["cities"] = [e["name"] for e in cities_v2_entries]
 
-    # Write manifest
+    # Write manifest.json
     manifest_path = output_dir / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
+    # Write cities.json v2
+    cities_json = {
+        "version": 2,
+        "cityNames": [e["name"] for e in cities_v2_entries],
+        "cities": cities_v2_entries,
+    }
+    cities_json_path = output_dir / "cities.json"
+    with open(cities_json_path, "w", encoding="utf-8") as f:
+        json.dump(cities_json, f, indent=2, ensure_ascii=False)
+
     print(f"Manifest written to: {manifest_path}")
+    print(f"Cities catalog written to: {cities_json_path}")
     print(f"Encrypted files in: {output_dir}")
 
     # Summary
     total_geojson = sum(e["sizeBytes"] for e in manifest["geojson"].values())
     total_pdf = sum(e["sizeBytes"] for e in manifest["pdf"].values())
+    boundary_files = list(output_dir.glob("*.boundary.enc"))
+    total_boundary = sum(f.stat().st_size for f in boundary_files)
     print(f"\nTotal: {total_geojson / 1024 / 1024:.1f} MB GeoJSON + {total_pdf / 1024 / 1024:.1f} MB PDF "
-          f"= {(total_geojson + total_pdf) / 1024 / 1024:.1f} MB")
+          f"+ {total_boundary / 1024:.0f} KB boundaries "
+          f"= {(total_geojson + total_pdf + total_boundary) / 1024 / 1024:.1f} MB")
 
 
 if __name__ == "__main__":

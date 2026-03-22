@@ -2,13 +2,13 @@
 # upload_resources.sh — Carica tutte le risorse cifrate su GitHub Releases
 #
 # Uso:
-#   ./scripts/upload_resources.sh [--geojson-tag TAG] [--pdf-tag TAG] [--manifest-tag TAG]
+#   ./scripts/upload_resources.sh [--geojson-tag TAG] [--pdf-tag TAG] [--boundary-tag TAG] [--manifest-tag TAG]
 #
-# Default: geojson-v1, pdf-v1, v1.0 (manifest)
+# Default: geojson-v1, pdf-v1, boundaries-v1, v1.0 (manifest + cities.json)
 #
 # Prerequisiti:
 #   - gh (GitHub CLI) installato e autenticato
-#   - File .enc e manifest.json in scripts/output/
+#   - File .enc, manifest.json e cities.json in scripts/output/
 
 set -euo pipefail
 
@@ -18,6 +18,7 @@ OUTPUT_DIR="${SCRIPT_DIR}/output"
 
 GEOJSON_TAG="geojson-v1"
 PDF_TAG="pdf-v1"
+BOUNDARY_TAG="boundaries-v1"
 MANIFEST_TAG="v1.0"
 
 # Parse argomenti
@@ -25,6 +26,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --geojson-tag) GEOJSON_TAG="$2"; shift 2 ;;
     --pdf-tag) PDF_TAG="$2"; shift 2 ;;
+    --boundary-tag) BOUNDARY_TAG="$2"; shift 2 ;;
     --manifest-tag) MANIFEST_TAG="$2"; shift 2 ;;
     *) echo "Argomento sconosciuto: $1"; exit 1 ;;
   esac
@@ -50,7 +52,9 @@ fi
 # Raccogli file
 GEOJSON_FILES=("${OUTPUT_DIR}"/*.geojson.deflate.enc)
 PDF_FILES=("${OUTPUT_DIR}"/*.pdf.enc)
+BOUNDARY_FILES=("${OUTPUT_DIR}"/*.boundary.enc)
 MANIFEST_FILE="${OUTPUT_DIR}/manifest.json"
+CITIES_FILE="${OUTPUT_DIR}/cities.json"
 
 if [[ ! -f "${GEOJSON_FILES[0]}" ]]; then
   echo "ERRORE: nessun file .geojson.deflate.enc trovato in ${OUTPUT_DIR}"
@@ -66,13 +70,13 @@ echo "=== Upload risorse su GitHub Releases ==="
 echo "Repository: ${REPO}"
 echo "GeoJSON tag: ${GEOJSON_TAG} (${#GEOJSON_FILES[@]} file)"
 echo "PDF tag: ${PDF_TAG} (${#PDF_FILES[@]} file)"
+echo "Boundary tag: ${BOUNDARY_TAG} (${#BOUNDARY_FILES[@]} file)"
 echo "Manifest tag: ${MANIFEST_TAG}"
 echo ""
 
 # --- GeoJSON ---
 echo "--- GeoJSON (${GEOJSON_TAG}) ---"
 
-# Crea la release se non esiste
 if ! gh release view "$GEOJSON_TAG" --repo "$REPO" &>/dev/null; then
   echo "Creo release ${GEOJSON_TAG}..."
   gh release create "$GEOJSON_TAG" \
@@ -103,9 +107,28 @@ for f in "${PDF_FILES[@]}"; do
   gh release upload "$PDF_TAG" "$f" --repo "$REPO" --clobber
 done
 
-# --- Manifest ---
+# --- Boundary ---
+if [[ -f "${BOUNDARY_FILES[0]}" ]]; then
+  echo ""
+  echo "--- Boundary (${BOUNDARY_TAG}) ---"
+
+  if ! gh release view "$BOUNDARY_TAG" --repo "$REPO" &>/dev/null; then
+    echo "Creo release ${BOUNDARY_TAG}..."
+    gh release create "$BOUNDARY_TAG" \
+      --repo "$REPO" \
+      --title "Boundaries ${BOUNDARY_TAG#boundaries-}" \
+      --notes "Encrypted municipal boundary files for geofencing"
+  fi
+
+  for f in "${BOUNDARY_FILES[@]}"; do
+    echo "  Upload $(basename "$f")..."
+    gh release upload "$BOUNDARY_TAG" "$f" --repo "$REPO" --clobber
+  done
+fi
+
+# --- Manifest + Cities ---
 echo ""
-echo "--- Manifest (${MANIFEST_TAG}) ---"
+echo "--- Manifest + Cities (${MANIFEST_TAG}) ---"
 
 if ! gh release view "$MANIFEST_TAG" --repo "$REPO" &>/dev/null; then
   echo "Creo release ${MANIFEST_TAG}..."
@@ -118,6 +141,11 @@ fi
 echo "  Upload manifest.json..."
 gh release upload "$MANIFEST_TAG" "$MANIFEST_FILE" --repo "$REPO" --clobber
 
+if [[ -f "$CITIES_FILE" ]]; then
+  echo "  Upload cities.json..."
+  gh release upload "$MANIFEST_TAG" "$CITIES_FILE" --repo "$REPO" --clobber
+fi
+
 echo ""
 echo "=== Upload completato ==="
 echo ""
@@ -125,3 +153,8 @@ echo "Verifica URL:"
 FIRST_GEOJSON=$(basename "${GEOJSON_FILES[0]}")
 echo "  curl -sI \"https://github.com/${REPO}/releases/download/${GEOJSON_TAG}/${FIRST_GEOJSON}\" | head -3"
 echo "  curl -sI \"https://github.com/${REPO}/releases/download/${MANIFEST_TAG}/manifest.json\" | head -3"
+echo "  curl -sI \"https://github.com/${REPO}/releases/download/${MANIFEST_TAG}/cities.json\" | head -3"
+if [[ -f "${BOUNDARY_FILES[0]}" ]]; then
+  FIRST_BOUNDARY=$(basename "${BOUNDARY_FILES[0]}")
+  echo "  curl -sI \"https://github.com/${REPO}/releases/download/${BOUNDARY_TAG}/${FIRST_BOUNDARY}\" | head -3"
+fi
