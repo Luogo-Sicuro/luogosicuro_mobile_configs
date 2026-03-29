@@ -4,7 +4,7 @@
 # Uso:
 #   ./scripts/upload_resources.sh [--geojson-tag TAG] [--pdf-tag TAG] [--boundary-tag TAG] [--manifest-tag TAG]
 #
-# Default: geojson-v1, pdf-v1, boundaries-v1, v1.0 (manifest + cities.json)
+# Default: geojson-v1, pdf-v1, boundaries-v1, v2.0 (manifest + cities.json)
 #
 # Prerequisiti:
 #   - gh (GitHub CLI) installato e autenticato
@@ -19,7 +19,7 @@ OUTPUT_DIR="${SCRIPT_DIR}/output"
 GEOJSON_TAG="geojson-v1"
 PDF_TAG="pdf-v1"
 BOUNDARY_TAG="boundaries-v1"
-MANIFEST_TAG="v1.0"
+MANIFEST_TAG="v2.0"
 
 # Parse argomenti
 while [[ $# -gt 0 ]]; do

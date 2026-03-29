@@ -12,7 +12,7 @@ Outputs:
 - {cityId}.pdf.enc              (encrypted PDF)
 - {cityId}.boundary.enc         (encrypted boundary GeoJSON)
 - manifest.json                 (version manifest with SHA-256 hashes)
-- cities.json                   (v2 city catalog with full metadata)
+- cities.json                 (v2 city catalog with full metadata)
 
 Usage:
     python3 package_resources.py [--output-dir ./output]
@@ -198,7 +198,7 @@ def main():
         "pdf": {},
     }
 
-    # cities.json v2 entries
+    # cities.json entries
     cities_v2_entries = []
 
     print(f"Packaging {len(city_dirs)} cities...\n")
@@ -252,7 +252,7 @@ def main():
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
-    # Write cities.json v2
+    # Write cities.json
     cities_json = {
         "version": 2,
         "cityNames": [e["name"] for e in cities_v2_entries],

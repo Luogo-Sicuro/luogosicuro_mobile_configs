@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # add_city.sh — Aggiunge una nuova citta al sistema di risorse remote
 #
-# Automatizza: aggiornamento metadata, packaging, upload risorse cifrate, aggiornamento cities.json v2
+# Automatizza: aggiornamento metadata, packaging, upload risorse cifrate, aggiornamento cities.json
 # NON automatizza: copia file nel bundle, aggiornamento codice (alias layer)
 #
 # Uso:
@@ -31,7 +31,7 @@ METADATA_FILE="${SCRIPT_DIR}/cities_metadata.json"
 GEOJSON_TAG="geojson-v1"
 PDF_TAG="pdf-v1"
 BOUNDARY_TAG="boundaries-v1"
-MANIFEST_TAG="v1.0"
+MANIFEST_TAG="v2.0"
 
 # Opzioni
 ALL_MODE=false
@@ -227,7 +227,7 @@ echo "  3. Verifica alias layer (LayerRepository.swift + CityRepository.kt)"
 echo "  4. Build e test su entrambe le piattaforme"
 echo ""
 echo "NOTA: Non serve aggiornare fallback list o layer allowlist!"
-echo "      L'app scarica automaticamente i metadati dal cities.json v2 remoto."
+echo "      L'app scarica automaticamente i metadati dal cities.json remoto."
 echo ""
 echo "URL di verifica:"
 echo "  GeoJSON:  https://github.com/${REPO}/releases/download/${GEOJSON_TAG}/${CITY_ID}.geojson.deflate.enc"
